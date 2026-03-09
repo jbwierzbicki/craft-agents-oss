@@ -95,6 +95,11 @@ export {
   loadSourcePermissionsConfig,
   getWorkspacePermissionsPath,
   getSourcePermissionsPath,
+  // Raw load/save (for CLI CRUD)
+  loadRawWorkspacePermissions,
+  loadRawSourcePermissions,
+  saveWorkspacePermissions,
+  saveSourcePermissions,
   // App-level default permissions (at ~/.craft-agent/permissions/)
   getAppPermissionsDir,
   ensureDefaultPermissions,

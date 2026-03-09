@@ -27,6 +27,7 @@ import { AbortReason } from './backend/types.ts';
 import { getBackendRuntime } from './backend/internal/driver-types.ts';
 
 import type { PermissionMode } from './mode-manager.ts';
+import type { ThinkingLevel } from './thinking-levels.ts';
 
 // Import models from centralized registry
 import { getModelById } from '../config/models.ts';
@@ -79,7 +80,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 
 // Session storage (plans folder path)
-import { getSessionPath, getSessionPlansPath } from '../sessions/storage.ts';
+import { getSessionDataPath, getSessionPath, getSessionPlansPath } from '../sessions/storage.ts';
 
 // Error typing
 import { parseError, type AgentError } from './errors.ts';
@@ -879,7 +880,8 @@ export class PiAgent extends BaseAgent {
     input: Record<string, unknown>;
   }): Promise<void> {
     const { requestId, toolName, toolCallId, input } = req;
-    this.debug(`PreToolUse request from subprocess: ${toolName} (${requestId})`);
+    const debugSessionId = this.config.session?.id || this._sessionId;
+    this.debug(`PreToolUse request from subprocess: ${toolName} (${requestId}, sessionId=${debugSessionId})`);
 
     // Capture metadata BEFORE centralized checks strip it out.
     // This bridge is deterministic and avoids relying solely on side-channel store lookups.
@@ -891,7 +893,7 @@ export class PiAgent extends BaseAgent {
         displayName: preDisplayName,
         capturedAt: Date.now(),
       });
-      this.debug(`Captured pre-tool metadata for ${toolName} (${toolCallId}): intent=${!!preIntent}, displayName=${!!preDisplayName}`);
+      this.debug(`Captured pre-tool metadata for ${toolName} (${toolCallId}, sessionId=${debugSessionId}): intent=${!!preIntent}, displayName=${!!preDisplayName}`);
     }
 
     // Fire PreToolUse automation event — await so automations run before tool executes
@@ -907,22 +909,26 @@ export class PiAgent extends BaseAgent {
     const plansFolderPath = sessionId
       ? getSessionPlansPath(rootPath, sessionId)
       : undefined;
+    const dataFolderPath = sessionId
+      ? getSessionDataPath(rootPath, sessionId)
+      : undefined;
 
     const checkResult = runPreToolUseChecks({
       toolName,
       input,
       sessionId,
       permissionMode: this.permissionManager.getPermissionMode(),
-      workspaceRootPath: this.workingDirectory,
+      workspaceRootPath: rootPath,
       workspaceId: workspaceSlug,
       plansFolderPath,
+      dataFolderPath,
       workingDirectory: this.config.session?.workingDirectory,
       activeSourceSlugs: Array.from(this.sourceManager.getActiveSlugs()),
       allSourceSlugs: this.sourceManager.getAllSources().map(s => s.config.slug),
       hasSourceActivation: !!this.onSourceActivationRequest,
       permissionManager: this.permissionManager,
       prerequisiteManager: this.prerequisiteManager,
-      onDebug: (msg) => this.debug(`PreToolUse: ${msg}`),
+      onDebug: (msg) => this.debug(`PreToolUse(sessionId=${sessionId}): ${msg}`),
     });
 
     switch (checkResult.type) {
@@ -951,7 +957,7 @@ export class PiAgent extends BaseAgent {
 
       case 'source_activation_needed': {
         const { sourceSlug, sourceExists } = checkResult;
-        this.debug(`PreToolUse: Source "${sourceSlug}" not active, attempting activation...`);
+        this.debug(`PreToolUse(sessionId=${sessionId}): Source "${sourceSlug}" not active, attempting activation...`);
 
         if (this.onSourceActivationRequest) {
           try {
@@ -963,7 +969,7 @@ export class PiAgent extends BaseAgent {
               this.send({ type: 'pre_tool_use_response', requestId, action: 'block', reason });
               return;
             }
-            this.debug(`PreToolUse: Source "${sourceSlug}" activated successfully`);
+            this.debug(`PreToolUse(sessionId=${sessionId}): Source "${sourceSlug}" activated successfully`);
             this.eventQueue.enqueue({
               type: 'source_activated' as const,
               sourceSlug,
@@ -984,16 +990,17 @@ export class PiAgent extends BaseAgent {
           input,
           sessionId,
           permissionMode: this.permissionManager.getPermissionMode(),
-          workspaceRootPath: this.workingDirectory,
+          workspaceRootPath: rootPath,
           workspaceId: workspaceSlug,
           plansFolderPath,
+          dataFolderPath,
           workingDirectory: this.config.session?.workingDirectory,
           activeSourceSlugs: Array.from(this.sourceManager.getActiveSlugs()),
           allSourceSlugs: this.sourceManager.getAllSources().map(s => s.config.slug),
           hasSourceActivation: !!this.onSourceActivationRequest,
           permissionManager: this.permissionManager,
           prerequisiteManager: this.prerequisiteManager,
-          onDebug: (msg) => this.debug(`PreToolUse: ${msg}`),
+          onDebug: (msg) => this.debug(`PreToolUse(sessionId=${sessionId}): ${msg}`),
         });
 
         if (postResult.type === 'modify') {
@@ -1024,7 +1031,7 @@ export class PiAgent extends BaseAgent {
         }
 
         const permRequestId = `pi-perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        this.debug(`PreToolUse: Prompting user for ${toolName} - ${checkResult.description}`);
+        this.debug(`PreToolUse(sessionId=${sessionId}): Prompting user for ${toolName} - ${checkResult.description}`);
 
         // Wait for user response via pendingPermissions
         const permissionPromise = new Promise<boolean>((resolve) => {
@@ -1630,6 +1637,12 @@ export class PiAgent extends BaseAgent {
       // Build context from sources
       const sourceContext = this.sourceManager.formatSourceState();
 
+      const promptModeDiagnostics = getPermissionModeDiagnostics(this._sessionId)
+      this.debug(
+        `[ModeSnapshot] sessionId=${this._sessionId} chatPrompt mode=${promptModeDiagnostics.permissionMode} ` +
+        `modeVersion=${promptModeDiagnostics.modeVersion} changedBy=${promptModeDiagnostics.lastChangedBy} changedAt=${promptModeDiagnostics.lastChangedAt}`
+      )
+
       // Build context parts using centralized PromptBuilder
       const contextParts = this.promptBuilder.buildContextParts(
         { plansFolderPath: getSessionPlansPath(this.config.workspace.rootPath, this._sessionId) },
@@ -1742,6 +1755,18 @@ export class PiAgent extends BaseAgent {
       this.send({ type: 'set_model', model });
     } else {
       this.debug(`Model updated but no subprocess to forward to: ${previousModel} → ${model}`);
+    }
+  }
+
+  override setThinkingLevel(level: ThinkingLevel): void {
+    const previousLevel = this.getThinkingLevel();
+    super.setThinkingLevel(level);
+    // Forward to subprocess so it uses the new thinking level on next turn
+    if (this.subprocess) {
+      this.debug(`Forwarding thinking level change to subprocess: ${previousLevel} → ${level}`);
+      this.send({ type: 'set_thinking_level', level });
+    } else {
+      this.debug(`Thinking level updated but no subprocess to forward to: ${previousLevel} → ${level}`);
     }
   }
 
