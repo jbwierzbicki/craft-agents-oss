@@ -186,6 +186,8 @@ export interface ClaudeAgentConfig {
   mcpPool?: McpClientPool;
   /** LLM connection slug for credential lookup in postInit(). */
   connectionSlug?: string;
+  /** Enable 1M context window for Opus 4.6. Default: true. Set false to use 200K and conserve usage limits. */
+  enable1MContext?: boolean;
 }
 
 // Permission request tracking
@@ -881,7 +883,9 @@ export class ClaudeAgent extends BaseAgent {
       // without an explicit opt-in. The betas header only works for API key users;
       // for OAuth the [1m] model suffix is the way. Use the suffix unconditionally
       // since it works for both auth paths. See: anthropics/claude-agent-sdk-typescript#238
-      const effectiveModel = getModelContextWindow(model) === 1_000_000
+      // Gated by workspace setting enable1MContext (default: true).
+      const use1M = this.config.enable1MContext !== false;
+      const effectiveModel = use1M && getModelContextWindow(model) === 1_000_000
         ? `${model}[1m]`
         : model;
 
