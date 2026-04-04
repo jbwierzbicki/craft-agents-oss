@@ -1,0 +1,12 @@
+FROM ghcr.io/lukilabs/craft-agents-server:latest
+
+USER root
+ENV HOME=/home/craftagents
+
+RUN pip3 install requests --break-system-packages 2>/dev/null || \
+    pip install requests 2>/dev/null || \
+    apt-get update && apt-get install -y python3-pip && pip3 install requests
+
+COPY telegram-bridge.py /app/telegram-bridge.py
+
+CMD ["python3", "/app/telegram-bridge.py"]
