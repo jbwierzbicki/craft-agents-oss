@@ -9,4 +9,5 @@ RUN apt-get update && \
 
 COPY telegram-bridge.py /app/telegram-bridge.py
 
+ENTRYPOINT []
 CMD ["python3", "/app/telegram-bridge.py"]
