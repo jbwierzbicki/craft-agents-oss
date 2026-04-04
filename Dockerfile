@@ -10,4 +10,4 @@ RUN bun install
 
 EXPOSE 9100
 
-CMD ["bun", "run", "packages/server/src/index.ts"]
+CMD ["bun", "run", "packages/server/src/index.ts", "--allow-insecure-bind"]
