@@ -2,7 +2,7 @@ import os
 import subprocess
 import requests
 import time
-import json
+import re
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
@@ -22,7 +22,6 @@ def get_updates(offset=None):
         return []
 
 def send_message(chat_id, text):
-    # Split into chunks if over Telegram's 4096 char limit
     for i in range(0, len(text), 4000):
         chunk = text[i:i+4000]
         try:
@@ -40,6 +39,9 @@ def ask_agent(message):
             **os.environ,
             "CRAFT_SERVER_URL": CRAFT_SERVER_URL,
             "CRAFT_SERVER_TOKEN": CRAFT_SERVER_TOKEN,
+            "NO_COLOR": "1",
+            "FORCE_COLOR": "0",
+            "TERM": "dumb",
         }
         result = subprocess.run(
             ["bun", "run", "/app/apps/cli/src/index.ts",
@@ -49,12 +51,19 @@ def ask_agent(message):
             timeout=120,
             env=env
         )
+
+        # Log exactly what we got back for debugging
+        print(f"STDOUT: {repr(result.stdout[:200])}")
+        print(f"STDERR: {repr(result.stderr[:200])}")
+        print(f"Return code: {result.returncode}")
+
         response = result.stdout.strip()
         if not response:
             response = result.stderr.strip()
         if not response:
             response = "No response from agent."
         return response
+
     except subprocess.TimeoutExpired:
         return "The agent took too long to respond. Try again."
     except Exception as e:
