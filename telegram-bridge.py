@@ -24,7 +24,6 @@ def get_updates(offset=None):
         return []
 
 def send_message(chat_id, text):
-    # Strip markdown that might break Telegram
     text = text.strip()
     for i in range(0, len(text), 4000):
         chunk = text[i:i+4000]
@@ -41,32 +40,30 @@ def ask_agent(message):
     done = threading.Event()
     error_holder = []
 
-    ws_url = CRAFT_SERVER_URL.replace("ws://", "ws://").replace("wss://", "wss://")
-
     def on_message(ws, raw):
-    try:
-        print(f"RAW MESSAGE: {raw[:500]}")
-        data = json.loads(raw)
-        msg_type = data.get("type")
-        print(f"TYPE: {msg_type}, KEYS: {list(data.keys())}")
+        try:
+            print(f"RAW MESSAGE: {raw[:500]}")
+            data = json.loads(raw)
+            msg_type = data.get("type")
+            print(f"TYPE: {msg_type}, KEYS: {list(data.keys())}")
 
-        if msg_type == "assistant_chunk":
-            chunk = data.get("content", "")
-            if chunk:
-                result_chunks.append(chunk)
+            if msg_type == "assistant_chunk":
+                chunk = data.get("content", "")
+                if chunk:
+                    result_chunks.append(chunk)
 
-        elif msg_type in ("session_complete", "turn_complete", "message_complete"):
-            print(f"Done signal received: {msg_type}")
-            done.set()
-            ws.close()
+            elif msg_type in ("session_complete", "turn_complete", "message_complete"):
+                print(f"Done signal received: {msg_type}")
+                done.set()
+                ws.close()
 
-        elif msg_type == "error":
-            error_holder.append(data.get("message", "Unknown error"))
-            done.set()
-            ws.close()
+            elif msg_type == "error":
+                error_holder.append(data.get("message", "Unknown error"))
+                done.set()
+                ws.close()
 
-    except Exception as e:
-        print(f"on_message error: {e}, raw: {raw[:200]}")
+        except Exception as e:
+            print(f"on_message error: {e}, raw: {raw[:200]}")
 
     def on_open(ws):
         print("WebSocket connected, sending message...")
@@ -88,7 +85,7 @@ def ask_agent(message):
         done.set()
 
     ws_app = websocket.WebSocketApp(
-        ws_url,
+        CRAFT_SERVER_URL,
         header={"Authorization": f"Bearer {CRAFT_SERVER_TOKEN}"},
         on_open=on_open,
         on_message=on_message,
@@ -100,7 +97,6 @@ def ask_agent(message):
     thread.daemon = True
     thread.start()
 
-    # Wait up to 120 seconds for a response
     done.wait(timeout=120)
 
     if error_holder:
