@@ -44,30 +44,29 @@ def ask_agent(message):
     ws_url = CRAFT_SERVER_URL.replace("ws://", "ws://").replace("wss://", "wss://")
 
     def on_message(ws, raw):
-        try:
-            data = json.loads(raw)
-            msg_type = data.get("type")
+    try:
+        print(f"RAW MESSAGE: {raw[:500]}")
+        data = json.loads(raw)
+        msg_type = data.get("type")
+        print(f"TYPE: {msg_type}, KEYS: {list(data.keys())}")
 
-            # Collect text chunks from the agent response
-            if msg_type == "assistant_chunk":
-                chunk = data.get("content", "")
-                if chunk:
-                    result_chunks.append(chunk)
+        if msg_type == "assistant_chunk":
+            chunk = data.get("content", "")
+            if chunk:
+                result_chunks.append(chunk)
 
-            # Session complete — agent finished responding
-            elif msg_type in ("session_complete", "turn_complete", "message_complete"):
-                print(f"Done signal received: {msg_type}")
-                done.set()
-                ws.close()
+        elif msg_type in ("session_complete", "turn_complete", "message_complete"):
+            print(f"Done signal received: {msg_type}")
+            done.set()
+            ws.close()
 
-            # Error from server
-            elif msg_type == "error":
-                error_holder.append(data.get("message", "Unknown error"))
-                done.set()
-                ws.close()
+        elif msg_type == "error":
+            error_holder.append(data.get("message", "Unknown error"))
+            done.set()
+            ws.close()
 
-        except Exception as e:
-            print(f"on_message error: {e}, raw: {raw[:100]}")
+    except Exception as e:
+        print(f"on_message error: {e}, raw: {raw[:200]}")
 
     def on_open(ws):
         print("WebSocket connected, sending message...")
