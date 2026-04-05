@@ -1,5 +1,4 @@
 import os
-import re
 import time
 import json
 import requests
@@ -66,13 +65,14 @@ def ask_agent(message):
             print(f"on_message error: {e}, raw: {raw[:200]}")
 
     def on_open(ws):
-        print("WebSocket connected, sending message...")
+        print("WebSocket connected!")
         payload = json.dumps({
             "type": "send_message",
             "sessionId": SESSION_ID,
             "content": message,
             "token": CRAFT_SERVER_TOKEN,
         })
+        print(f"Sending payload: {payload[:200]}")
         ws.send(payload)
 
     def on_error(ws, error):
@@ -81,12 +81,14 @@ def ask_agent(message):
         done.set()
 
     def on_close(ws, code, msg):
-        print(f"WebSocket closed: {code} {msg}")
+        print(f"WebSocket closed: code={code} msg={msg} chunks_so_far={len(result_chunks)}")
         done.set()
 
+    ws_url_with_token = f"{CRAFT_SERVER_URL}?token={CRAFT_SERVER_TOKEN}"
+    print(f"Connecting to: {CRAFT_SERVER_URL}")
+
     ws_app = websocket.WebSocketApp(
-        CRAFT_SERVER_URL,
-        header={"Authorization": f"Bearer {CRAFT_SERVER_TOKEN}"},
+        ws_url_with_token,
         on_open=on_open,
         on_message=on_message,
         on_error=on_error,
