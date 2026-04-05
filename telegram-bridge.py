@@ -1,8 +1,10 @@
 import os
-import subprocess
-import requests
-import time
 import re
+import time
+import json
+import requests
+import threading
+import websocket
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
@@ -22,56 +24,99 @@ def get_updates(offset=None):
         return []
 
 def send_message(chat_id, text):
+    # Strip markdown that might break Telegram
+    text = text.strip()
     for i in range(0, len(text), 4000):
         chunk = text[i:i+4000]
         try:
             requests.post(f"{API}/sendMessage", json={
                 "chat_id": chat_id,
                 "text": chunk,
-                "parse_mode": "Markdown"
             }, timeout=10)
         except Exception as e:
             print(f"Error sending message: {e}")
 
 def ask_agent(message):
-    try:
-        env = {
-            **os.environ,
-            "CRAFT_SERVER_URL": CRAFT_SERVER_URL,
-            "CRAFT_SERVER_TOKEN": CRAFT_SERVER_TOKEN,
-            "NO_COLOR": "1",
-            "FORCE_COLOR": "0",
-            "TERM": "dumb",
-        }
-        result = subprocess.run(
-            ["bun", "run", "/app/apps/cli/src/index.ts",
-             "send", SESSION_ID, message],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            env=env
-        )
+    result_chunks = []
+    done = threading.Event()
+    error_holder = []
 
-        # Log exactly what we got back for debugging
-        print(f"STDOUT: {repr(result.stdout[:200])}")
-        print(f"STDERR: {repr(result.stderr[:200])}")
-        print(f"Return code: {result.returncode}")
+    ws_url = CRAFT_SERVER_URL.replace("ws://", "ws://").replace("wss://", "wss://")
 
-        response = result.stdout.strip()
-        if not response:
-            response = result.stderr.strip()
-        if not response:
-            response = "No response from agent."
-        return response
+    def on_message(ws, raw):
+        try:
+            data = json.loads(raw)
+            msg_type = data.get("type")
 
-    except subprocess.TimeoutExpired:
-        return "The agent took too long to respond. Try again."
-    except Exception as e:
-        return f"Error contacting agent: {e}"
+            # Collect text chunks from the agent response
+            if msg_type == "assistant_chunk":
+                chunk = data.get("content", "")
+                if chunk:
+                    result_chunks.append(chunk)
+
+            # Session complete — agent finished responding
+            elif msg_type in ("session_complete", "turn_complete", "message_complete"):
+                print(f"Done signal received: {msg_type}")
+                done.set()
+                ws.close()
+
+            # Error from server
+            elif msg_type == "error":
+                error_holder.append(data.get("message", "Unknown error"))
+                done.set()
+                ws.close()
+
+        except Exception as e:
+            print(f"on_message error: {e}, raw: {raw[:100]}")
+
+    def on_open(ws):
+        print("WebSocket connected, sending message...")
+        payload = json.dumps({
+            "type": "send_message",
+            "sessionId": SESSION_ID,
+            "content": message,
+            "token": CRAFT_SERVER_TOKEN,
+        })
+        ws.send(payload)
+
+    def on_error(ws, error):
+        print(f"WebSocket error: {error}")
+        error_holder.append(str(error))
+        done.set()
+
+    def on_close(ws, code, msg):
+        print(f"WebSocket closed: {code} {msg}")
+        done.set()
+
+    ws_app = websocket.WebSocketApp(
+        ws_url,
+        header={"Authorization": f"Bearer {CRAFT_SERVER_TOKEN}"},
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
+
+    thread = threading.Thread(target=ws_app.run_forever)
+    thread.daemon = True
+    thread.start()
+
+    # Wait up to 120 seconds for a response
+    done.wait(timeout=120)
+
+    if error_holder:
+        return f"Agent error: {error_holder[0]}"
+
+    response = "".join(result_chunks).strip()
+    if not response:
+        return "No response from agent."
+    return response
+
 
 def main():
     print(f"Telegram bridge started. Allowed chat ID: {ALLOWED_CHAT_ID}")
     print(f"Using session: {SESSION_ID}")
+    print(f"Server: {CRAFT_SERVER_URL}")
     offset = None
 
     while True:
